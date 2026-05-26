@@ -62,3 +62,9 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+
+[tool.pyrefly]
+search-path = [
+    ".",
+    ".claude/skills"
+]

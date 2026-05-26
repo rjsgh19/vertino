@@ -1,0 +1,12 @@
+{
+  "include": [
+    "harness_engine",
+    "agent_runtime",
+    "infrastructure",
+    "my-harness-platform",
+    ".claude/skills"
+  ],
+  "extraPaths": [
+    ".claude/skills"
+  ]
+}
