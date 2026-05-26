@@ -41,8 +41,8 @@ class PlannerAgent:
         telemetry.event("planner", "enter", trace_id, run_id=run_id, specs=len(specs))
 
         failure_block = self._format_failure(last_failure)
-        user_prompt = self._compose_user_prompt(specs, failure_block)
-        raw = self.llm_complete(self.contract.render(), user_prompt)
+        user_prompt, spec_block = self._compose_user_prompt(specs, failure_block)
+        raw = self.llm_complete(self.contract.render(), user_prompt, spec_block)
         plan = self._parse_json(raw, fallback_diagnosis="initial-plan")
 
         self.replays.save(ReplaySnapshot(
@@ -75,19 +75,22 @@ class PlannerAgent:
 
     def _compose_user_prompt(
         self, specs: dict[str, dict[str, Any]], failure_block: str
-    ) -> str:
+    ) -> tuple[str, str]:
         # 스펙 인덱스를 1KB 내외로 압축 — 키 목록 + version만 노출.
         spec_index = {
             name: {"version": s.get("version"), "top_keys": sorted(s.keys())}
             for name, s in specs.items()
         }
-        return (
+        spec_block = (
             "# Specs Index\n"
             f"{json.dumps(spec_index, ensure_ascii=False, indent=2)}\n\n"
+        )
+        user_prompt = (
             "# Last Failure\n"
             f"{failure_block}\n\n"
             "위 정보를 토대로 JSON 계획을 산출하라."
         )
+        return user_prompt, spec_block
 
     @staticmethod
     def _parse_json(raw: str, fallback_diagnosis: str) -> dict[str, Any]:

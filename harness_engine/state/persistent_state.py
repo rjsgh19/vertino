@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, ClassVar, Optional
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing import TypedDict
 
 from .ephemeral_state import EphemeralState
 from .failure_types import FailureRecord

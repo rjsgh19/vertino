@@ -28,17 +28,27 @@ class EngineerAgent:
         trace_id: str,
         plan: dict[str, Any],
         spec_paths: list[str],
+        specs: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         telemetry = get_telemetry()
         telemetry.event("engineer", "enter", trace_id, run_id=run_id,
                         steps=len(plan.get("steps", [])))
 
+        # === [전략 C] 스펙 다이렉트 주입 ===
+        # Planner가 Plan에 사양을 구구절절 써줄 필요 없이, Engineer가 명세서를 직접 참조한다.
+        spec_block = ""
+        if specs:
+            spec_block = (
+                "# Domain Specifications (직접 참조)\n"
+                f"{json.dumps(specs, ensure_ascii=False, indent=2)}\n\n"
+            )
+
         user_prompt = (
             "# Plan\n"
             f"{json.dumps(plan, ensure_ascii=False, indent=2)}\n\n"
-            "위 계획에 따라 패치 본문을 JSON으로 산출하라."
+            "위 명세서와 계획에 따라 패치 본문을 JSON으로 산출하라."
         )
-        raw = self.llm_complete(self.contract.render(), user_prompt)
+        raw = self.llm_complete(self.contract.render(), user_prompt, spec_block)
         payload = self._parse_patches(raw)
 
         self.replays.save(ReplaySnapshot(

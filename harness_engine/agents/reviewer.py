@@ -37,6 +37,44 @@ class ReviewerAgent:
         telemetry.event("reviewer", "enter", trace_id, run_id=run_id,
                         drift=drift_summary, sandbox_passed=sandbox_passed)
 
+        # === [전략 A] 결정적 규칙 기반 조기 탈출 ===
+        # FAIL이 확정된 경우 LLM 호출을 완전히 스킵하여 토큰 낭비를 차단한다.
+        if drift_summary != "no-drift":
+            result = {
+                "verdict": "FAIL",
+                "failure_type": FailureType.SPEC_DRIFT.value,
+                "issues": [f"Spec drift detected: {drift_summary[:200]}"],
+                "summary": "결정적 규칙 판정 — Spec drift로 즉시 FAIL (LLM 호출 생략)",
+            }
+            self.replays.save(ReplaySnapshot(
+                run_id=run_id, trace_id=trace_id, node="reviewer",
+                prompt="[SKIPPED — deterministic FAIL: spec drift]",
+                spec_paths=spec_paths, tool_output=result,
+            ))
+            telemetry.event("reviewer", "early_exit", trace_id, run_id=run_id,
+                            verdict="FAIL", failure_type=FailureType.SPEC_DRIFT.value,
+                            reason="deterministic_drift")
+            return result
+
+        if not sandbox_passed:
+            decided_failure = sandbox_failure_type or FailureType.UNKNOWN.value
+            result = {
+                "verdict": "FAIL",
+                "failure_type": decided_failure,
+                "issues": [f"Sandbox test failed: {sandbox_excerpt[:200]}"],
+                "summary": "결정적 규칙 판정 — Sandbox 실패로 즉시 FAIL (LLM 호출 생략)",
+            }
+            self.replays.save(ReplaySnapshot(
+                run_id=run_id, trace_id=trace_id, node="reviewer",
+                prompt="[SKIPPED — deterministic FAIL: sandbox]",
+                spec_paths=spec_paths, tool_output=result,
+            ))
+            telemetry.event("reviewer", "early_exit", trace_id, run_id=run_id,
+                            verdict="FAIL", failure_type=decided_failure,
+                            reason="deterministic_sandbox")
+            return result
+
+        # === PASS 경로 — 세부 품질 이슈 탐색을 위해 LLM 비판 수행 ===
         user_prompt = (
             "# Drift\n"
             f"{drift_summary}\n\n"
@@ -46,25 +84,12 @@ class ReviewerAgent:
             "위 결과를 종합한 JSON 판정을 산출하라."
         )
 
-        # LLM 비판 의견은 보조 정보로만 사용. 결정적 판정은 결정 규칙으로 처리.
         raw = self.llm_complete(self.contract.render(), user_prompt)
         opinion = self._safe_parse(raw)
 
-        # === 결정 규칙 (LLM에 위임하지 않음) ===
-        decided_failure: str
-        if drift_summary != "no-drift":
-            verdict = "FAIL"
-            decided_failure = FailureType.SPEC_DRIFT.value
-        elif not sandbox_passed:
-            verdict = "FAIL"
-            decided_failure = sandbox_failure_type or FailureType.UNKNOWN.value
-        else:
-            verdict = "PASS"
-            decided_failure = "NONE"
-
         result = {
-            "verdict": verdict,
-            "failure_type": decided_failure,
+            "verdict": "PASS",
+            "failure_type": "NONE",
             "issues": opinion.get("issues", []),
             "summary": opinion.get("summary", ""),
         }
@@ -73,7 +98,7 @@ class ReviewerAgent:
             prompt=user_prompt, spec_paths=spec_paths, tool_output=result,
         ))
         telemetry.event("reviewer", "exit", trace_id, run_id=run_id,
-                        verdict=verdict, failure_type=decided_failure)
+                        verdict="PASS", failure_type="NONE")
         return result
 
     @staticmethod

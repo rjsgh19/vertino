@@ -33,12 +33,30 @@ class ClaudeAdapter(LLMAdapter):
             raise RuntimeError(f"환경변수 {self.api_key_env} 미설정")
 
         client = anthropic.Anthropic(api_key=api_key)
+
+        # === 프롬프트 캐싱 최적화 (정적 앞단 고정) ===
+        # 접두사 일치 캐싱이므로 반드시 [정적 가이드 → 세미정적 스펙 → 동적 내용] 순서를 지킨다.
+        system_blocks: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": request.system_prompt,  # [1] 정적 가이드 (ROLE/CONSTRAINTS/OUTPUT_FORMAT)
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        # [2] 세미정적 스펙 컨텍스트가 존재하면 별도 캐시 블록으로 추가
+        if request.static_spec_context:
+            system_blocks.append({
+                "type": "text",
+                "text": request.static_spec_context,
+                "cache_control": {"type": "ephemeral"},
+            })
+
         result = client.messages.create(
             model=self.model,
-            system=request.system_prompt,
+            system=system_blocks,  # 문자열 → 블록 배열 (캐시 마커 포함)
             max_tokens=request.max_tokens,
             temperature=request.temperature,  # 반드시 0
-            messages=[{"role": "user", "content": request.user_prompt}],
+            messages=[{"role": "user", "content": request.user_prompt}],  # [3] 동적 내용은 최후방
         )
         text = "".join(
             block.text for block in result.content if getattr(block, "type", None) == "text"
@@ -48,6 +66,8 @@ class ClaudeAdapter(LLMAdapter):
             usage = {
                 "input_tokens": int(getattr(result.usage, "input_tokens", 0) or 0),
                 "output_tokens": int(getattr(result.usage, "output_tokens", 0) or 0),
+                "cache_creation_input_tokens": int(getattr(result.usage, "cache_creation_input_tokens", 0) or 0),
+                "cache_read_input_tokens": int(getattr(result.usage, "cache_read_input_tokens", 0) or 0),
             }
         return LLMResponse(
             text=text,

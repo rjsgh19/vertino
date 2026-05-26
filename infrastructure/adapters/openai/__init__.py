@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from typing import Any
+
 from .. import LLMAdapter, LLMRequest, LLMResponse
 
 
@@ -25,14 +27,22 @@ class OpenAIAdapter(LLMAdapter):
         if not api_key:
             raise RuntimeError(f"환경변수 {self.api_key_env} 미설정")
         client = OpenAI(api_key=api_key)
+
+        # === 프롬프트 캐싱 최적화 (정적 앞단 고정) ===
+        # OpenAI 자동 캐싱도 접두사 일치 방식이므로 동일 순서를 지킨다:
+        #   [1] 정적 가이드 → [2] 세미정적 스펙 → [3] 동적 페이로드
+        messages: list[Any] = [
+            {"role": "system", "content": request.system_prompt},  # [1] 정적 가이드
+        ]
+        if request.static_spec_context:
+            messages.append({"role": "system", "content": request.static_spec_context})  # [2] 세미정적 스펙
+        messages.append({"role": "user", "content": request.user_prompt})  # [3] 동적 내용은 최후방
+
         rsp = client.chat.completions.create(
             model=self.model,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
-            messages=[
-                {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": request.user_prompt},
-            ],
+            messages=messages,  # type: ignore
         )
         choice = rsp.choices[0]
         return LLMResponse(

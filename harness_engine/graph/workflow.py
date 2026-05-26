@@ -125,7 +125,7 @@ class FactoryWorkflow:
         """LangGraph StateGraph 컴파일 결과 반환."""
         from langgraph.graph import StateGraph, END  # type: ignore
 
-        g: Any = StateGraph(GraphState)
+        g: Any = StateGraph(GraphState)  # type: ignore
         g.add_node("load_spec", self._n_load_spec)
         g.add_node("planner", self._n_planner)
         g.add_node("engineer", self._n_engineer)
@@ -184,6 +184,7 @@ class FactoryWorkflow:
                 state = self._n_drift(state)
                 if state.get("drift_result", {}).get("drifted"):
                     # PathTraversal 분기는 SECURITY_VIOLATION으로 이미 기록됨 — 그 외는 SPEC_DRIFT.
+                    eph = state["ephemeral"]
                     if not eph.last_failure or eph.last_failure.failure_type != FailureType.SECURITY_VIOLATION:
                         self._record_failure(state, FailureType.SPEC_DRIFT,
                                              state["drift_result"].get("summary", "drift")[:240],
@@ -254,6 +255,7 @@ class FactoryWorkflow:
         payload = self.engineer.synthesize(
             run_id=per.run_id, trace_id=eph.trace_id,
             plan=state.get("plan", {}), spec_paths=per.spec_paths,
+            specs=state.get("specs"),  # [전략 C] 스펙 다이렉트 주입
         )
         state["patches"] = payload  # type: ignore[typeddict-unknown-key]
         return state
@@ -414,7 +416,11 @@ class FactoryWorkflow:
             state["staging_dir"] = ""  # type: ignore[typeddict-unknown-key]
 
     def _n_hitl(self, state: GraphState) -> GraphState:
-        return self._do_hitl(state)
+        eph, per = state["ephemeral"], state["persistent"]
+        eph.awaiting_hitl = True
+        self._cleanup_staging(state)
+        self.hitl.trigger(per, trace_id=eph.trace_id, run_id=per.run_id)
+        return state
 
     # === Helpers ===
 
@@ -434,9 +440,10 @@ class FactoryWorkflow:
 
         adapter = self.llm_adapter
 
-        def _call(system: str, user: str) -> str:
+        def _call(system: str, user: str, static_spec: str = "") -> str:
             req = LLMRequest(
                 system_prompt=system, user_prompt=user,
+                static_spec_context=static_spec,
                 temperature=LLM_TEMPERATURE,  # 결정성 강제
             )
             return adapter.complete(req).text
